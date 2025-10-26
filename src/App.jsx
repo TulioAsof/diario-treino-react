@@ -519,26 +519,38 @@ const AI_RESPONSE_SCHEMA = {
                 "proteinas": { type: "NUMBER" },
                 "carboidratos": { type: "NUMBER" },
                 "gorduras": { type: "NUMBER" },
-            }
+            },
+            required: ["calorias", "proteinas", "carboidratos", "gorduras"]
         },
         "workoutPlan": {
-            type: "OBJECT",
-            description: "Um objeto onde cada chave é o nome do dia de treino (ex: 'Push A') e o valor é um array de exercícios. Crie 6 dias (Push A, Pull A, Legs A, Push B, Pull B, Legs B).",
-            patternProperties: {
-                ".*": {
-                    type: "ARRAY",
-                    items: {
-                        type: "OBJECT",
-                        properties: {
-                            "exercicio": { type: "STRING" },
-                            "series": { type: "NUMBER" },
-                            "reps": { type: "STRING" }
+            type: "ARRAY", // Pedimos um ARRAY (lista)
+            description: "Um array de 6 objetos, um para cada dia de treino (PPL A, PPL B).",
+            items: { // O que cada item do array deve ter
+                type: "OBJECT",
+                properties: {
+                    "dayName": { 
+                        type: "STRING",
+                        description: "O nome do dia, ex: 'Push A (Peito/Ombro)'"
+                    },
+                    "exercises": {
+                        type: "ARRAY",
+                        description: "A lista de exercícios para esse dia.",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                "exercicio": { type: "STRING" },
+                                "series": { type: "NUMBER" },
+                                "reps": { type: "STRING" }
+                            },
+                            required: ["exercicio", "series", "reps"]
                         }
                     }
-                }
+                },
+                required: ["dayName", "exercises"]
             }
         }
-    }
+    },
+    required: ["nutritionGoals", "workoutPlan"]
 };
 
 function ViewAjustes({ profile, onSave, showNotification }) {
@@ -598,27 +610,88 @@ function ViewAjustes({ profile, onSave, showNotification }) {
         }
         if (!GEMINI_API_KEY) {
             showNotification("Chave da API Gemini não configurada.", true);
+            console.error("VITE_GEMINI_API_KEY não encontrada. Adicione-a ao seu .env.local");
             return;
         }
-
+        
         setIsAiLoading(true);
 
-        try {
-            const systemPrompt = `Você é um personal trainer e nutricionista de elite. O utilizador irá descrever os seus objetivos. 
+        const systemPrompt = `Você é um personal trainer e nutricionista de elite. O utilizador irá descrever os seus objetivos. 
         Sua tarefa é gerar um plano de treino (workoutPlan) e metas nutricionais (nutritionGoals) completos.
-        O plano de treino DEVE ser uma divisão PPL (Push, Pull, Legs) de 6 dias: Push A, Pull A, Legs A, Push B, Pull B, Legs B.
+        O 'workoutPlan' DEVE ser um ARRAY de 6 objetos. Cada objeto deve ter 'dayName' (ex: 'Push A') e 'exercises' (um array de exercícios).
+        Siga a divisão PPL de 6 dias (Push A, Pull A, Legs A, Push B, Pull B, Legs B).
         Foque em hipertrofia, com séries entre 3-4 e repetições maioritariamente entre 6-15.
         DEVOLVA APENAS E SÓ O OBJETO JSON no formato exato do schema fornecido.`;
-            const prompt = `Objetivo do utilizador: ${aiPrompt}\n${systemPrompt}`;
-            const aiText = await generateContent(prompt, GEMINI_API_KEY);
-            const aiResponse = JSON.parse(aiText);
-            if (aiResponse.nutritionGoals && aiResponse.workoutPlan) {
-                setFormData(aiResponse);
-                showNotification("Plano gerado pela IA! Verifique e salve.");
+
+        const payload = {
+            contents: [{ parts: [{ text: `Objetivo do utilizador: ${aiPrompt}` }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: AI_RESPONSE_SCHEMA // Usando o novo schema
+            }
+        };
+
+        try {
+            // Endereço da API já corrigido
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorBody = await response.json();
+                console.error("Erro da API Gemini:", errorBody);
+                throw new Error(`Erro da API: ${errorBody.error.message || response.statusText}`);
+            }
+
+            const result = await response.json();
+            
+            if (result.candidates && result.candidates[0].content?.parts?.[0]?.text) {
+                const aiResponse = JSON.parse(result.candidates[0].content.parts[0].text);
+                
+                // Validamos se a IA devolveu o que pedimos (um objeto nutritionGoals e um array workoutPlan)
+                if (aiResponse.nutritionGoals && Array.isArray(aiResponse.workoutPlan)) {
+                    
+                    // Convertemos o ARRAY 'workoutPlan' num OBJETO
+                    // (O formato que o nosso formulário e base de dados esperam)
+                    const workoutPlanAsObject = aiResponse.workoutPlan.reduce((acc, day) => {
+                        // A IA deve devolver dayName e exercises
+                        if(day.dayName && Array.isArray(day.exercises)) {
+                           acc[day.dayName] = day.exercises;
+                        }
+                        return acc;
+                    }, {});
+
+                    // Verificação de segurança
+                    if (Object.keys(workoutPlanAsObject).length < 6) {
+                         showNotification("IA gerou um plano incompleto, mas a carregar...", true);
+                         if (Object.keys(workoutPlanAsObject).length === 0) {
+                            throw new Error("Formato do workoutPlan da IA está vazio após conversão.");
+                         }
+                    }
+
+                    // Preenchemos o formulário com os dados convertidos
+                    setFormData({
+                        nutritionGoals: aiResponse.nutritionGoals,
+                        workoutPlan: workoutPlanAsObject
+                    });
+                    showNotification("Plano gerado pela IA! Verifique e salve.");
+
+                } else {
+                    throw new Error("Resposta da IA em formato inesperado (esperava nutritionGoals e um array workoutPlan).");
+                }
             } else {
-                throw new Error("Resposta da IA em formato inesperado.");
+                // Isto pode acontecer se a IA se recusar a responder (filtro de segurança)
+                const feedback = result.promptFeedback;
+                if (feedback && feedback.blockReason) {
+                    throw new Error(`IA bloqueou o prompt: ${feedback.blockReason}`);
+                }
+                throw new Error("Nenhuma resposta válida da IA.");
             }
         } catch (error) {
+            console.error("Erro ao chamar IA:", error);
             showNotification(`Erro ao gerar: ${error.message}`, true);
         }
         setIsAiLoading(false);
@@ -679,22 +752,28 @@ function ViewAjustes({ profile, onSave, showNotification }) {
             <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
                 <h2 className="text-2xl font-semibold mb-4 text-center">Plano de Treino (Editável)</h2>
                 <div className="space-y-4">
-                    {Object.keys(formData.workoutPlan).map((day) => (
-                        <details key={day} className="bg-gray-700 p-4 rounded-lg open:shadow-lg">
-                            <summary className="text-xl font-semibold text-blue-300 cursor-pointer">{day}</summary>
-                            <div className="mt-4 space-y-3">
-                                {formData.workoutPlan[day].map((ex, exIndex) => (
-                                    <div key={exIndex} className="grid grid-cols-8 gap-2 items-center">
-                                        <input type="text" placeholder="Exercício" value={ex.exercicio} onChange={(e) => handleWorkoutChange(day, exIndex, 'exercicio', e.target.value)} className="col-span-4 bg-gray-600 p-2 rounded-lg" />
-                                        <input type="number" placeholder="Séries" value={ex.series} onChange={(e) => handleWorkoutChange(day, exIndex, 'series', e.target.value)} className="col-span-1 bg-gray-600 p-2 rounded-lg" />
-                                        <input type="text" placeholder="Reps" value={ex.reps} onChange={(e) => handleWorkoutChange(day, exIndex, 'reps', e.target.value)} className="col-span-2 bg-gray-600 p-2 rounded-lg" />
-                                        <button type="button" onClick={() => handleRemoveExercise(day, exIndex)} className="col-span-1 text-red-500 hover:text-red-400 text-lg">&times; Remover</button>
-                                    </div>
-                                ))}
-                                <button type="button" onClick={() => handleAddExercise(day)} className="w-full text-sm bg-blue-600 hover:bg-blue-700 py-1 rounded-lg">+ Adicionar Exercício</button>
-                            </div>
-                        </details>
-                    ))}
+                    {/* Adicionado um fallback caso workoutPlan esteja malformado */}
+                    {formData.workoutPlan && Object.keys(formData.workoutPlan).length > 0 ? (
+                        Object.keys(formData.workoutPlan).map((day) => (
+                            <details key={day} className="bg-gray-700 p-4 rounded-lg open:shadow-lg">
+                                <summary className="text-xl font-semibold text-blue-300 cursor-pointer">{day}</summary>
+                                <div className="mt-4 space-y-3">
+                                    {/* Adicionado um fallback caso o dia esteja malformado */}
+                                    {Array.isArray(formData.workoutPlan[day]) && formData.workoutPlan[day].map((ex, exIndex) => (
+                                        <div key={exIndex} className="grid grid-cols-8 gap-2 items-center">
+                                            <input type="text" placeholder="Exercício" value={ex.exercicio} onChange={(e) => handleWorkoutChange(day, exIndex, 'exercicio', e.target.value)} className="col-span-4 bg-gray-600 p-2 rounded-lg" />
+                                            <input type="number" placeholder="Séries" value={ex.series} onChange={(e) => handleWorkoutChange(day, exIndex, 'series', e.target.value)} className="col-span-1 bg-gray-600 p-2 rounded-lg" />
+                                            <input type="text" placeholder="Reps" value={ex.reps} onChange={(e) => handleWorkoutChange(day, exIndex, 'reps', e.target.value)} className="col-span-2 bg-gray-600 p-2 rounded-lg" />
+                                            <button type="button" onClick={() => handleRemoveExercise(day, exIndex)} className="col-span-1 text-red-500 hover:text-red-400 text-lg">&times; Remover</button>
+                                        </div>
+                                    ))}
+                                    <button type="button" onClick={() => handleAddExercise(day)} className="w-full text-sm bg-blue-600 hover:bg-blue-700 py-1 rounded-lg">+ Adicionar Exercício</button>
+                                </div>
+                            </details>
+                        ))
+                    ) : (
+                        <p className="text-gray-400 text-center">Não foi possível carregar o plano de treino. Tente gerar um novo com a IA.</p>
+                    )}
                 </div>
             </div>
 
@@ -705,7 +784,6 @@ function ViewAjustes({ profile, onSave, showNotification }) {
         </form>
     );
 }
-
 
 // --- COMPONENTE PAI (Gestor de Auth) ---
 export default function App() {
