@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { auth, db } from './firebaseConfig'; // Importamos a config do Firebase
 import { 
@@ -18,6 +17,7 @@ import {
     getDoc,
     setDoc
 } from 'firebase/firestore';
+import { generateContent } from './gemini';
 
 // --- DADOS DEFAULT (PARA NOVOS UTILIZADORES) ---
 const DEFAULT_PLANO_TREINO = {
@@ -598,54 +598,27 @@ function ViewAjustes({ profile, onSave, showNotification }) {
         }
         if (!GEMINI_API_KEY) {
             showNotification("Chave da API Gemini não configurada.", true);
-            console.error("VITE_GEMINI_API_KEY não encontrada. Adicione-a ao seu .env.local");
             return;
         }
 
         setIsAiLoading(true);
 
-        const systemPrompt = `Você é um personal trainer e nutricionista de elite. O utilizador irá descrever os seus objetivos. 
+        try {
+            const systemPrompt = `Você é um personal trainer e nutricionista de elite. O utilizador irá descrever os seus objetivos. 
         Sua tarefa é gerar um plano de treino (workoutPlan) e metas nutricionais (nutritionGoals) completos.
         O plano de treino DEVE ser uma divisão PPL (Push, Pull, Legs) de 6 dias: Push A, Pull A, Legs A, Push B, Pull B, Legs B.
         Foque em hipertrofia, com séries entre 3-4 e repetições maioritariamente entre 6-15.
         DEVOLVA APENAS E SÓ O OBJETO JSON no formato exato do schema fornecido.`;
-
-        const payload = {
-            contents: [{ parts: [{ text: `Objetivo do utilizador: ${aiPrompt}` }] }],
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            generationConfig: {
-                responseMimeType: "application/json",
-                responseSchema: AI_RESPONSE_SCHEMA
-            }
-        };
-
-        try {
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                throw new Error(`Erro da API: ${response.statusText}`);
-            }
-
-            const result = await response.json();
-
-            if (result.candidates && result.candidates[0].content?.parts?.[0]?.text) {
-                const aiResponse = JSON.parse(result.candidates[0].content.parts[0].text);
-                // Validação simples
-                if (aiResponse.nutritionGoals && aiResponse.workoutPlan) {
-                    setFormData(aiResponse); // Preenche o formulário com a sugestão da IA
-                    showNotification("Plano gerado pela IA! Verifique e salve.");
-                } else {
-                    throw new Error("Resposta da IA em formato inesperado.");
-                }
+            const prompt = `Objetivo do utilizador: ${aiPrompt}\n${systemPrompt}`;
+            const aiText = await generateContent(prompt, GEMINI_API_KEY);
+            const aiResponse = JSON.parse(aiText);
+            if (aiResponse.nutritionGoals && aiResponse.workoutPlan) {
+                setFormData(aiResponse);
+                showNotification("Plano gerado pela IA! Verifique e salve.");
             } else {
-                throw new Error("Nenhuma resposta válida da IA.");
+                throw new Error("Resposta da IA em formato inesperado.");
             }
         } catch (error) {
-            console.error("Erro ao chamar IA:", error);
             showNotification(`Erro ao gerar: ${error.message}`, true);
         }
         setIsAiLoading(false);
