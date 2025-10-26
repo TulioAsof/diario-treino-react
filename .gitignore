@@ -1,0 +1,17 @@
+
+# node_modules
+node_modules/
+
+# ficheiros de build
+dist/
+.vite/
+
+# ficheiros de ambiente
+.env
+.env.local
+.env.*.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
