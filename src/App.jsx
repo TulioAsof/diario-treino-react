@@ -19,6 +19,17 @@ import {
 } from 'firebase/firestore';
 import { generateContent } from './gemini';
 
+import { 
+    LineChart, 
+    Line, 
+    XAxis, 
+    YAxis, 
+    CartesianGrid, 
+    Tooltip, 
+    Legend, 
+    ResponsiveContainer 
+} from 'recharts';
+
 // --- DADOS DEFAULT (PARA NOVOS UTILIZADORES) ---
 const DEFAULT_PLANO_TREINO = {
     "Push A (Peito/Ombro)": [{ 'exercicio': 'Supino Reto', 'series': 4, 'reps': '6-10' }, { 'exercicio': 'Supino Inclinado', 'series': 3, 'reps': '8-12' }, { 'exercicio': 'Desenvolvimento Ombros', 'series': 3, 'reps': '8-12' }, { 'exercicio': 'Elevação Lateral', 'series': 4, 'reps': '10-15' }, { 'exercicio': 'Tríceps Corda', 'series': 3, 'reps': '10-15' }],
@@ -102,7 +113,7 @@ function LoginComponent({ showNotification }) {
 
 // --- COMPONENTE PRINCIPAL DA APLICAÇÃO ---
 function AppDiario({ user, showNotification }) {
-    const [currentView, setCurrentView] = useState('treino');
+     const [currentView, setCurrentView] = useState('dashboard');
     const [workoutLog, setWorkoutLog] = useState([]);
     const [nutritionLog, setNutritionLog] = useState([]);
 
@@ -250,7 +261,8 @@ function AppDiario({ user, showNotification }) {
                 <button onClick={() => signOut(auth)} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg">Sair</button>
             </header>
 
-            <nav className="grid grid-cols-5 gap-1 bg-gray-800 rounded-lg p-2 mb-6 shadow-lg">
+            <nav className="grid grid-cols-6 gap-1 bg-gray-800 rounded-lg p-2 mb-6 shadow-lg">
+                <NavButton icon="fa-chart-line" label="Dashboard" onClick={() => setCurrentView('dashboard')} isActive={currentView === 'dashboard'} />
                 <NavButton icon="fa-dumbbell" label="Treino" onClick={() => setCurrentView('treino')} isActive={currentView === 'treino'} />
                 <NavButton icon="fa-apple-alt" label="Nutrição" onClick={() => setCurrentView('nutri')} isActive={currentView === 'nutri'} />
                 <NavButton icon="fa-clipboard-list" label="Plano" onClick={() => setCurrentView('plano')} isActive={currentView === 'plano'} />
@@ -268,6 +280,166 @@ function AppDiario({ user, showNotification }) {
 // --- VISUALIZAÇÕES (COMPONENTES DAS PÁGINAS) ---
 
 // (Os componentes antigos foram adaptados para receber 'plano' e 'metas' como props)
+
+
+function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification }) {
+    const [aiInsights, setAiInsights] = useState('');
+    const [isAiLoading, setIsAiLoading] = useState(false);
+
+    const formatDataResumida = (dateStr) => {
+        const [year, month, day] = dateStr.split('-');
+        return `${day}/${month}`;
+    };
+
+    const workoutChartData = useMemo(() => {
+        const volumePerDay = workoutLog.reduce((acc, log) => {
+            if (!log.data) return acc;
+            const volume = (log.peso || 0) * (log.reps || 0);
+            acc[log.data] = (acc[log.data] || 0) + volume;
+            return acc;
+        }, {});
+        return Object.keys(volumePerDay)
+            .map(data => ({ data: formatDataResumida(data), volume: volumePerDay[data] }))
+            .sort((a, b) => new Date(a.data.split('/').reverse().join('-')) - new Date(b.data.split('/').reverse().join('-')));
+    }, [workoutLog]);
+
+    const nutritionChartData = useMemo(() => {
+        const macrosPerDay = nutritionLog.reduce((acc, log) => {
+            if (!log.data) return acc;
+            if (!acc[log.data]) acc[log.data] = { calorias: 0, proteinas: 0 };
+            acc[log.data].calorias += Number(log.calorias || 0);
+            acc[log.data].proteinas += Number(log.proteina || 0);
+            return acc;
+        }, {});
+        return Object.keys(macrosPerDay)
+            .map(data => ({
+                data: formatDataResumida(data),
+                Calorias: Number(macrosPerDay[data].calorias).toFixed(0),
+                Proteínas: Number(macrosPerDay[data].proteinas).toFixed(0),
+                "Meta Kcal": userProfile?.nutritionGoals?.calorias || 0,
+                "Meta Prot.": userProfile?.nutritionGoals?.proteinas || 0
+            }))
+            .sort((a, b) => new Date(a.data.split('/').reverse().join('-')) - new Date(b.data.split('/').reverse().join('-')));
+    }, [nutritionLog, userProfile]);
+
+    const handleGetAiInsights = async () => {
+        if (!GEMINI_API_KEY) {
+            showNotification("Chave da API Gemini não configurada.", true);
+            return;
+        }
+        if ((workoutLog?.length || 0) < 3 && (nutritionLog?.length || 0) < 3) {
+            showNotification("Registe mais alguns dias de treino e nutrição para a IA poder analisar.", true);
+            return;
+        }
+
+        setIsAiLoading(true);
+        setAiInsights('');
+
+        const dataSummary = {
+            profile: userProfile,
+            recentWorkouts: workoutLog.slice(-30),
+            recentNutrition: nutritionLog.slice(-30)
+        };
+
+        const systemPrompt = `Você é um personal trainer e nutricionista de elite. Analise os dados do utilizador (perfil, registos de treino e registos de nutrição).
+Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de carga, adesão à dieta e sugestão de periodização. Seja conciso e motivador.`;
+
+        const payload = {
+            contents: [{ parts: [{ text: `Analise estes dados e forneça insights: ${JSON.stringify(dataSummary)}` }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            generationConfig: { responseMimeType: "text/plain" }
+        };
+
+        try {
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err?.error?.message || res.statusText);
+            }
+            const result = await res.json();
+            const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) {
+                setAiInsights(text);
+            } else {
+                const feedback = result.promptFeedback;
+                throw new Error(feedback?.blockReason || "Nenhuma resposta válida da IA.");
+            }
+        } catch (error) {
+            console.error("Erro IA:", error);
+            showNotification(`Erro ao gerar insights: ${error.message}`, true);
+        } finally {
+            setIsAiLoading(false);
+        }
+    };
+
+    return (
+        <div className="fade-in space-y-6">
+            <h2 className="text-3xl font-bold text-blue-400 text-center mb-6">Meu Dashboard</h2>
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
+                <h3 className="text-xl font-semibold mb-4 text-gray-200">Evolução do Volume Total (Peso x Reps)</h3>
+                {workoutChartData.length > 1 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={workoutChartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#4a5568" />
+                            <XAxis dataKey="data" stroke="#9ca3af" />
+                            <YAxis stroke="#9ca3af" />
+                            <Tooltip contentStyle={{ backgroundColor: '#2d3748', border: 'none', borderRadius: '8px' }} />
+                            <Legend />
+                            <Line type="monotone" dataKey="volume" stroke="#3b82f6" strokeWidth={2} name="Volume (Kg)" />
+                        </LineChart>
+                    </ResponsiveContainer>
+                ) : (
+                    <p className="text-gray-400 text-center">Registe pelo menos 2 treinos para ver a sua progressão.</p>
+                )}
+            </div>
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
+                <h3 className="text-xl font-semibold mb-4 text-gray-200">Acompanhamento Nutricional</h3>
+                {nutritionChartData.length > 1 ? (
+                    <ResponsiveContainer width="100%" height={250}>
+                        <LineChart data={nutritionChartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#4a5568" />
+                            <XAxis dataKey="data" stroke="#9ca3af" />
+                            <YAxis stroke="#9ca3af" />
+                            <Tooltip contentStyle={{ backgroundColor: '#2d3748', border: 'none', borderRadius: '8px' }} />
+                            <Legend />
+                            <Line type="monotone" dataKey="Calorias" stroke="#3b82f6" strokeWidth={2} />
+                            <Line type="monotone" dataKey="Proteínas" stroke="#10b981" strokeWidth={2} />
+                            <Line type="monotone" dataKey="Meta Kcal" stroke="#eab308" strokeWidth={2} strokeDasharray="4 4" />
+                            <Line type="monotone" dataKey="Meta Prot." stroke="#f472b6" strokeWidth={2} strokeDasharray="4 4" />
+                        </LineChart>
+                    </ResponsiveContainer>
+                ) : (
+                    <p className="text-gray-400 text-center">Registe pelo menos 2 dias de nutrição para ver o gráfico.</p>
+                )}
+            </div>
+
+            <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
+                <h3 className="text-xl font-semibold mb-4 text-gray-200">Insights & Periodização (IA)</h3>
+                <button
+                    type="button"
+                    onClick={handleGetAiInsights}
+                    disabled={isAiLoading}
+                    className="w-full mt-3 bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition duration-200 flex items-center justify-center disabled:opacity-50"
+                >
+                    {isAiLoading ? <LoadingSpinner /> : <><i className="fas fa-magic mr-2"></i> Analisar meus dados e sugerir periodização</>}
+                </button>
+
+                {aiInsights && (
+                    <div className="mt-6 bg-gray-700 p-4 rounded-lg prose prose-invert prose-sm text-gray-300">
+                        <div dangerouslySetInnerHTML={{ __html: aiInsights.replace(/\n/g, '<br/>').replace(/•/g, '• ') }} />
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
 
 function ViewPlano({ plano }) {
     return (
