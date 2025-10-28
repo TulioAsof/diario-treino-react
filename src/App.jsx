@@ -19,17 +19,28 @@ import {
 } from 'firebase/firestore';
 import { generateContent } from './gemini';
 
+import { Line } from 'react-chartjs-2';
 import { 
-    LineChart, 
-    Line, 
-    XAxis, 
-    YAxis, 
-    CartesianGrid, 
-    Tooltip, 
-    Legend, 
-    ResponsiveContainer 
-} from 'recharts';
+    Chart as ChartJS, 
+    CategoryScale, 
+    LinearScale, 
+    PointElement, 
+    LineElement, 
+    Title, 
+    Tooltip as ChartTooltip, 
+    Legend as ChartLegend 
+} from 'chart.js';
 
+// Registrar os componentes do Chart.js
+ChartJS.register(
+    CategoryScale, 
+    LinearScale, 
+    PointElement, 
+    LineElement, 
+    Title, 
+    ChartTooltip, 
+    ChartLegend
+);
 // --- DADOS DEFAULT (PARA NOVOS UTILIZADORES) ---
 const DEFAULT_PLANO_TREINO = {
     "Push A (Peito/Ombro)": [{ 'exercicio': 'Supino Reto', 'series': 4, 'reps': '6-10' }, { 'exercicio': 'Supino Inclinado', 'series': 3, 'reps': '8-12' }, { 'exercicio': 'Desenvolvimento Ombros', 'series': 3, 'reps': '8-12' }, { 'exercicio': 'Elevação Lateral', 'series': 4, 'reps': '10-15' }, { 'exercicio': 'Tríceps Corda', 'series': 3, 'reps': '10-15' }],
@@ -322,6 +333,29 @@ function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification
             .sort((a, b) => new Date(a.data.split('/').reverse().join('-')) - new Date(b.data.split('/').reverse().join('-')));
     }, [nutritionLog, userProfile]);
 
+    // react-charts: preparar séries + eixos
+    const workoutSeries = useMemo(() => [
+        {
+            label: 'Volume (Kg)',
+            data: workoutChartData.map(d => ({ primary: d.data, secondary: d.volume }))
+        }
+    ], [workoutChartData]);
+
+    const workoutPrimaryAxis = useMemo(() => ({ getValue: d => d.primary }), []);
+    const workoutSecondaryAxes = useMemo(() => [{ getValue: d => d.secondary }], []);
+
+    const nutritionSeries = useMemo(() => {
+        const calorias = { label: 'Calorias', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d.Calorias) })) };
+        const proteinas = { label: 'Proteínas', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d.Proteínas) })) };
+        const metaKcal = { label: 'Meta Kcal', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d["Meta Kcal"]) })) };
+        const metaProt = { label: 'Meta Prot.', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d["Meta Prot."]) })) };
+        return [calorias, proteinas, metaKcal, metaProt];
+    }, [nutritionChartData]);
+
+    const nutritionPrimaryAxis = useMemo(() => ({ getValue: d => d.primary }), []);
+    const nutritionSecondaryAxes = useMemo(() => [{ getValue: d => d.secondary }], []);
+
+    // --- Função de IA Insights (mantida igual) ---
     const handleGetAiInsights = async () => {
         if (!GEMINI_API_KEY) {
             showNotification("Chave da API Gemini não configurada.", true);
@@ -384,16 +418,13 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
             <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
                 <h3 className="text-xl font-semibold mb-4 text-gray-200">Evolução do Volume Total (Peso x Reps)</h3>
                 {workoutChartData.length > 1 ? (
-                    <ResponsiveContainer width="100%" height={250}>
-                        <LineChart data={workoutChartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#4a5568" />
-                            <XAxis dataKey="data" stroke="#9ca3af" />
-                            <YAxis stroke="#9ca3af" />
-                            <Tooltip contentStyle={{ backgroundColor: '#2d3748', border: 'none', borderRadius: '8px' }} />
-                            <Legend />
-                            <Line type="monotone" dataKey="volume" stroke="#3b82f6" strokeWidth={2} name="Volume (Kg)" />
-                        </LineChart>
-                    </ResponsiveContainer>
+                    <div style={{ width: '100%', height: 250 }}>
+                        <Chart options={{
+                            data: workoutSeries,
+                            primaryAxis: workoutPrimaryAxis,
+                            secondaryAxes: workoutSecondaryAxes
+                        }} />
+                    </div>
                 ) : (
                     <p className="text-gray-400 text-center">Registe pelo menos 2 treinos para ver a sua progressão.</p>
                 )}
@@ -402,19 +433,13 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
             <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
                 <h3 className="text-xl font-semibold mb-4 text-gray-200">Acompanhamento Nutricional</h3>
                 {nutritionChartData.length > 1 ? (
-                    <ResponsiveContainer width="100%" height={250}>
-                        <LineChart data={nutritionChartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#4a5568" />
-                            <XAxis dataKey="data" stroke="#9ca3af" />
-                            <YAxis stroke="#9ca3af" />
-                            <Tooltip contentStyle={{ backgroundColor: '#2d3748', border: 'none', borderRadius: '8px' }} />
-                            <Legend />
-                            <Line type="monotone" dataKey="Calorias" stroke="#3b82f6" strokeWidth={2} />
-                            <Line type="monotone" dataKey="Proteínas" stroke="#10b981" strokeWidth={2} />
-                            <Line type="monotone" dataKey="Meta Kcal" stroke="#eab308" strokeWidth={2} strokeDasharray="4 4" />
-                            <Line type="monotone" dataKey="Meta Prot." stroke="#f472b6" strokeWidth={2} strokeDasharray="4 4" />
-                        </LineChart>
-                    </ResponsiveContainer>
+                    <div style={{ width: '100%', height: 250 }}>
+                        <Chart options={{
+                            data: nutritionSeries,
+                            primaryAxis: nutritionPrimaryAxis,
+                            secondaryAxes: nutritionSecondaryAxes
+                        }} />
+                    </div>
                 ) : (
                     <p className="text-gray-400 text-center">Registe pelo menos 2 dias de nutrição para ver o gráfico.</p>
                 )}
