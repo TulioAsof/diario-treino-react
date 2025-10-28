@@ -301,6 +301,10 @@ function AppDiario({ user, showNotification }) {
 // (Os componentes antigos foram adaptados para receber 'plano' e 'metas' como props)
 
 
+// ... (imports no topo do arquivo - MANTIDOS CORRETOS para react-chartjs-2) ...
+
+// --- VISUALIZAÇÕES (COMPONENTES DAS PÁGINAS) ---
+
 function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification }) {
     const [aiInsights, setAiInsights] = useState('');
     const [isAiLoading, setIsAiLoading] = useState(false);
@@ -310,19 +314,59 @@ function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification
         return `${day}/${month}`;
     };
 
-    const workoutChartData = useMemo(() => {
+    const workoutChartDataRaw = useMemo(() => {
         const volumePerDay = workoutLog.reduce((acc, log) => {
             if (!log.data) return acc;
-            const volume = (log.peso || 0) * (log.reps || 0);
+            const volume = (log.peso || 0) * (log.reps || 0) * 1; // 1 série por log
             acc[log.data] = (acc[log.data] || 0) + volume;
             return acc;
         }, {});
         return Object.keys(volumePerDay)
-            .map(data => ({ data: formatDataResumida(data), volume: volumePerDay[data] }))
-            .sort((a, b) => new Date(a.data.split('/').reverse().join('-')) - new Date(b.data.split('/').reverse().join('-')));
+            .map(data => ({ data: data, volume: volumePerDay[data] }))
+            .sort((a, b) => new Date(a.data) - new Date(b.data));
     }, [workoutLog]);
 
-    const nutritionChartData = useMemo(() => {
+    // 💡 LÓGICA CORRETA: Objeto de configuração do Chart.js (Treino)
+    const workoutChartConfig = useMemo(() => {
+        if (workoutChartDataRaw.length < 2) return null;
+
+        return {
+            labels: workoutChartDataRaw.map(d => formatDataResumida(d.data)),
+            datasets: [
+                {
+                    label: "Volume (Kg)",
+                    data: workoutChartDataRaw.map(d => d.volume),
+                    borderColor: '#3b82f6', // blue-600
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    tension: 0.2, // Linha um pouco mais suave
+                }
+            ]
+        };
+    }, [workoutChartDataRaw]);
+
+    // 💡 OPÇÕES: Configurações do Chart.js para Dark Mode
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                labels: { color: '#9ca3af' } // gray-400 para texto da legenda
+            },
+        },
+        scales: {
+            x: {
+                ticks: { color: '#9ca3af' },
+                grid: { color: '#4a5568' } // gray-700 para linhas de grade
+            },
+            y: {
+                ticks: { color: '#9ca3af' },
+                grid: { color: '#4a5568' }
+            }
+        }
+    };
+    // ---------------------------------------------------------------------
+
+    const nutritionChartDataRaw = useMemo(() => {
         const macrosPerDay = nutritionLog.reduce((acc, log) => {
             if (!log.data) return acc;
             if (!acc[log.data]) acc[log.data] = { calorias: 0, proteinas: 0 };
@@ -332,39 +376,66 @@ function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification
         }, {});
         return Object.keys(macrosPerDay)
             .map(data => ({
-                data: formatDataResumida(data),
+                data: data,
                 Calorias: Number(macrosPerDay[data].calorias).toFixed(0),
                 Proteínas: Number(macrosPerDay[data].proteinas).toFixed(0),
                 "Meta Kcal": userProfile?.nutritionGoals?.calorias || 0,
                 "Meta Prot.": userProfile?.nutritionGoals?.proteinas || 0
             }))
-            .sort((a, b) => new Date(a.data.split('/').reverse().join('-')) - new Date(b.data.split('/').reverse().join('-')));
+            .sort((a, b) => new Date(a.data) - new Date(b.data));
     }, [nutritionLog, userProfile]);
 
-    // react-charts: preparar séries + eixos
-    const workoutSeries = useMemo(() => [
-        {
-            label: 'Volume (Kg)',
-            data: workoutChartData.map(d => ({ primary: d.data, secondary: d.volume }))
-        }
-    ], [workoutChartData]);
+    // 💡 LÓGICA CORRETA: Objeto de configuração do Chart.js (Nutrição)
+    const nutritionChartConfig = useMemo(() => {
+        if (nutritionChartDataRaw.length < 2) return null;
 
-    const workoutPrimaryAxis = useMemo(() => ({ getValue: d => d.primary }), []);
-    const workoutSecondaryAxes = useMemo(() => [{ getValue: d => d.secondary }], []);
+        const labels = nutritionChartDataRaw.map(d => formatDataResumida(d.data));
+        const metas = userProfile?.nutritionGoals;
 
-    const nutritionSeries = useMemo(() => {
-        const calorias = { label: 'Calorias', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d.Calorias) })) };
-        const proteinas = { label: 'Proteínas', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d.Proteínas) })) };
-        const metaKcal = { label: 'Meta Kcal', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d["Meta Kcal"]) })) };
-        const metaProt = { label: 'Meta Prot.', data: nutritionChartData.map(d => ({ primary: d.data, secondary: Number(d["Meta Prot."]) })) };
-        return [calorias, proteinas, metaKcal, metaProt];
-    }, [nutritionChartData]);
+        return {
+            labels,
+            datasets: [
+                {
+                    label: "Calorias",
+                    data: nutritionChartDataRaw.map(d => d.Calorias),
+                    borderColor: '#3b82f6', // blue-600
+                    tension: 0.2,
+                },
+                {
+                    label: "Proteínas",
+                    data: nutritionChartDataRaw.map(d => d.Proteínas),
+                    borderColor: '#10b981', // emerald-500 (green)
+                    tension: 0.2,
+                },
+                // Metas (Linhas tracejadas)
+                {
+                    label: "Meta Kcal",
+                    data: labels.map(() => metas?.calorias || 0),
+                    borderColor: '#eab308', // yellow-600
+                    borderDash: [5, 5], // Tracejado
+                    pointRadius: 0, // Sem pontos para metas
+                    tension: 0.2,
+                },
+                {
+                    label: "Meta Prot.",
+                    data: labels.map(() => metas?.proteinas || 0),
+                    borderColor: '#f472b6', // pink-400
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    tension: 0.2,
+                }
+            ]
+        };
+    }, [nutritionChartDataRaw, userProfile]);
 
-    const nutritionPrimaryAxis = useMemo(() => ({ getValue: d => d.primary }), []);
-    const nutritionSecondaryAxes = useMemo(() => [{ getValue: d => d.secondary }], []);
+    // ---------------------------------------------------------------------
+    // ❌ REMOVIDOS OS useMemo para react-charts:
+    // workoutSeries, workoutPrimaryAxis, workoutSecondaryAxes
+    // nutritionSeries, nutritionPrimaryAxis, nutritionSecondaryAxes
+    // ---------------------------------------------------------------------
 
-    // --- Função de IA Insights (mantida igual) ---
     const handleGetAiInsights = async () => {
+        // ... (lógica da IA inalterada)
         if (!GEMINI_API_KEY) {
             showNotification("Chave da API Gemini não configurada.", true);
             return;
@@ -376,16 +447,13 @@ function ViewDashboard({ workoutLog, nutritionLog, userProfile, showNotification
 
         setIsAiLoading(true);
         setAiInsights('');
-
         const dataSummary = {
             profile: userProfile,
             recentWorkouts: workoutLog.slice(-30),
             recentNutrition: nutritionLog.slice(-30)
         };
-
         const systemPrompt = `Você é um personal trainer e nutricionista de elite. Analise os dados do utilizador (perfil, registos de treino e registos de nutrição).
 Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de carga, adesão à dieta e sugestão de periodização. Seja conciso e motivador.`;
-
         const payload = {
             contents: [{ parts: [{ text: `Analise estes dados e forneça insights: ${JSON.stringify(dataSummary)}` }] }],
             systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -398,7 +466,6 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err?.error?.message || res.statusText);
@@ -419,19 +486,17 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
         }
     };
 
+
     return (
         <div className="fade-in space-y-6">
             <h2 className="text-3xl font-bold text-blue-400 text-center mb-6">Meu Dashboard</h2>
 
             <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
                 <h3 className="text-xl font-semibold mb-4 text-gray-200">Evolução do Volume Total (Peso x Reps)</h3>
-                {workoutChartData.length > 1 ? (
-                    <div style={{ width: '100%', height: 250 }}>
-                        <Chart options={{
-                            data: workoutSeries,
-                            primaryAxis: workoutPrimaryAxis,
-                            secondaryAxes: workoutSecondaryAxes
-                        }} />
+                {/* 💡 CORRIGIDO: Usando o componente <Line /> do react-chartjs-2 */}
+                {workoutChartConfig ? (
+                    <div style={{ height: '250px', width: '100%' }}>
+                        <Line data={workoutChartConfig} options={chartOptions} />
                     </div>
                 ) : (
                     <p className="text-gray-400 text-center">Registe pelo menos 2 treinos para ver a sua progressão.</p>
@@ -440,13 +505,10 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
 
             <div className="bg-gray-800 p-6 rounded-lg shadow-xl">
                 <h3 className="text-xl font-semibold mb-4 text-gray-200">Acompanhamento Nutricional</h3>
-                {nutritionChartData.length > 1 ? (
-                    <div style={{ width: '100%', height: 250 }}>
-                        <Chart options={{
-                            data: nutritionSeries,
-                            primaryAxis: nutritionPrimaryAxis,
-                            secondaryAxes: nutritionSecondaryAxes
-                        }} />
+                {/* 💡 CORRIGIDO: Usando o componente <Line /> do react-chartjs-2 */}
+                {nutritionChartConfig ? (
+                    <div style={{ height: '250px', width: '100%' }}>
+                        <Line data={nutritionChartConfig} options={chartOptions} />
                     </div>
                 ) : (
                     <p className="text-gray-400 text-center">Registe pelo menos 2 dias de nutrição para ver o gráfico.</p>
@@ -473,6 +535,7 @@ Forneça 3 a 5 insights curtos e acionáveis (lista). Foque em progressão de ca
         </div>
     );
 }
+
 
 function ViewPlano({ plano }) {
     return (
