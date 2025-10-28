@@ -228,6 +228,14 @@ function AppDiario({ user, showNotification }) {
 
     const renderActiveView = () => {
         switch (currentView) {
+
+            case 'dashboard':
+                return <ViewDashboard
+                            workoutLog={workoutLog}
+                            nutritionLog={nutritionLog}
+                            userProfile={userProfile}
+                            showNotification={showNotification}
+                        />;
             case 'treino':
                 return <ViewRegTreino 
                             plano={userProfile.workoutPlan} 
